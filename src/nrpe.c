@@ -1174,11 +1174,14 @@ void handle_connection(int sock){
 	packet send_packet;
 	int bytes_to_send;
 	int bytes_to_recv;
-	char buffer[MAX_INPUT_BUFFER];
+	static int max_output_buffer=sizeof(char)*MAX_OUTPUT_BUFFER;
+	static char *buffer=NULL;
 	char raw_command[MAX_INPUT_BUFFER];
 	char processed_command[MAX_INPUT_BUFFER];
 	int result=STATE_OK;
 	int early_timeout=FALSE;
+	int bytes_copied=0;
+	char *pbuffer;
 	int rc;
 	int x;
 #ifdef DEBUG
@@ -1188,6 +1191,8 @@ void handle_connection(int sock){
 	SSL *ssl=NULL;
 #endif
 
+        if(!buffer) buffer=malloc(max_output_buffer);
+        pbuffer=buffer;
 
 	/* log info to syslog facility */
 	if(debug==TRUE)
@@ -1317,8 +1322,8 @@ void handle_connection(int sock){
 	/* if this is the version check command, just spew it out */
 	if(!strcmp(command_name,NRPE_HELLO_COMMAND)){
 
-		snprintf(buffer,sizeof(buffer),"NRPE v%s",PROGRAM_VERSION);
-		buffer[sizeof(buffer)-1]='\x0';
+		snprintf(buffer,max_output_buffer,"NRPE v%s",PROGRAM_VERSION);
+		buffer[max_output_buffer-1]='\x0';
 
 		/* log info to syslog facility */
 		if(debug==TRUE)
@@ -1332,8 +1337,8 @@ void handle_connection(int sock){
 		temp_command=find_command(command_name);
 		if(temp_command==NULL){
 
-			snprintf(buffer,sizeof(buffer),"NRPE: Command '%s' not defined",command_name);
-			buffer[sizeof(buffer)-1]='\x0';
+			snprintf(buffer,max_output_buffer,"NRPE: Command '%s' not defined",command_name);
+			buffer[max_output_buffer-1]='\x0';
 
 			/* log error to syslog facility */
 			if(debug==TRUE)
@@ -1358,7 +1363,7 @@ void handle_connection(int sock){
 
 			/* run the command */
 			strcpy(buffer,"");
-			result=my_system(processed_command,command_timeout,&early_timeout,buffer,sizeof(buffer));
+			result=my_system(processed_command,command_timeout,&early_timeout,buffer,max_output_buffer);
 
 			/* log debug info */
 			if(debug==TRUE)
@@ -1366,11 +1371,11 @@ void handle_connection(int sock){
 
 			/* see if the command timed out */
 			if(early_timeout==TRUE)
-				snprintf(buffer,sizeof(buffer)-1,"NRPE: Command timed out after %d seconds\n",command_timeout);
+				snprintf(buffer,max_output_buffer-1,"NRPE: Command timed out after %d seconds\n",command_timeout);
 			else if(!strcmp(buffer,""))
-				snprintf(buffer,sizeof(buffer)-1,"NRPE: Unable to read output\n");
+				snprintf(buffer,max_output_buffer-1,"NRPE: Unable to read output\n");
 
-			buffer[sizeof(buffer)-1]='\x0';
+			buffer[max_output_buffer-1]='\x0';
 
 			/* check return code bounds */
 			if((result<0) || (result>3)){
@@ -1395,6 +1400,10 @@ void handle_connection(int sock){
 	if(buffer[strlen(buffer)-1]=='\n')
 		buffer[strlen(buffer)-1]='\x0';
 
+	do {
+
+	if(debug==TRUE) syslog(LOG_DEBUG,"Sending response - bytes left: %d", strlen(pbuffer));
+
 	/* clear the response packet buffer */
 	bzero(&send_packet,sizeof(send_packet));
 
@@ -1403,11 +1412,17 @@ void handle_connection(int sock){
 
 	/* initialize response packet data */
 	send_packet.packet_version=(int16_t)htons(NRPE_PACKET_VERSION_2);
-	send_packet.packet_type=(int16_t)htons(RESPONSE_PACKET);
 	send_packet.result_code=(int16_t)htons(result);
-	strncpy(&send_packet.buffer[0],buffer,MAX_PACKETBUFFER_LENGTH);
+	strncpy(&send_packet.buffer[0],pbuffer,MAX_PACKETBUFFER_LENGTH);
 	send_packet.buffer[MAX_PACKETBUFFER_LENGTH-1]='\x0';
 	
+	bytes_copied = strlen(&send_packet.buffer[0]);
+	pbuffer = pbuffer+bytes_copied;
+	if(strlen(pbuffer)>0)
+		send_packet.packet_type=(int16_t)htons(RESPONSE_PACKET_PART);
+	else
+		send_packet.packet_type=(int16_t)htons(RESPONSE_PACKET);
+
 	/* calculate the crc 32 value of the packet */
 	send_packet.crc32_value=(u_int32_t)0L;
 	calculated_crc32=calculate_crc32((char *)&send_packet,sizeof(send_packet));
@@ -1425,6 +1440,8 @@ void handle_connection(int sock){
 	else
 		SSL_write(ssl,&send_packet,bytes_to_send);
 #endif
+
+	} while (strlen(pbuffer) > 0);
 
 #ifdef HAVE_SSL
 	if(ssl){
@@ -1490,10 +1507,6 @@ int my_system(char *command,int timeout,int *early_timeout,char *output,int outp
 	/* create a pipe */
 	pipe(fd);
 
-	/* make the pipe non-blocking */
-	fcntl(fd[0],F_SETFL,O_NONBLOCK);
-	fcntl(fd[1],F_SETFL,O_NONBLOCK);
-
 	/* get the command start time */
 	time(&start_time);
 
@@ -1546,12 +1559,16 @@ int my_system(char *command,int timeout,int *early_timeout,char *output,int outp
 			result=STATE_CRITICAL;
 		        }
 		else{
-
+                        int blocksize=1024;
+                        int w=0;
 			/* read all lines of output - supports Nagios 3.x multiline output */
-			while((bytes_read=fread(buffer,1,sizeof(buffer)-1,fp))>0){
+			while((bytes_read=fread(buffer,1,blocksize,fp))>0){
 
 				/* write the output back to the parent process */
-				write(fd[1],buffer,bytes_read);
+			        if(-1==(w=write(fd[1],buffer,bytes_read))) {
+				    if(debug==TRUE) syslog(LOG_DEBUG,"Child write error: %d", errno);
+				}
+				if(debug==TRUE) syslog(LOG_DEBUG,"Writing %d bytes to parent", bytes_read);
 				}
 
 			/* close the command and get termination status */
@@ -1583,6 +1600,23 @@ int my_system(char *command,int timeout,int *early_timeout,char *output,int outp
 		/* close pipe for writing */
 		close(fd[1]);
 
+		/* try and read the results from the command output (retry if we encountered a signal) */
+		if(output!=NULL){
+                        int r=0;
+                        bytes_read=1;
+			do{
+				bytes_read=read(fd[0], output+r, output_length-r-1);
+                                if(bytes_read) r+=bytes_read;
+				if(debug==TRUE) syslog(LOG_DEBUG,"Reading %d bytes from child (buffer is %d), now have %d total", bytes_read, output_length, r);
+			}while ((bytes_read==-1 && errno==EINTR) || bytes_read);
+			if(debug==TRUE) syslog(LOG_DEBUG,"bytes_read: %d, r: %d, errno: %d", bytes_read, r, errno);
+
+			if(bytes_read==-1)
+				*output='\0';
+			else
+				output[r]='\0';
+			}
+
 		/* wait for child to exit */
 		waitpid(pid,&status,0);
 
@@ -1599,18 +1633,6 @@ int my_system(char *command,int timeout,int *early_timeout,char *output,int outp
 		/* check bounds on the return value */
 		if(result<0 || result>3)
 			result=STATE_UNKNOWN;
-
-		/* try and read the results from the command output (retry if we encountered a signal) */
-		if(output!=NULL){
-			do{
-				bytes_read=read(fd[0], output, output_length-1);
-			}while (bytes_read==-1 && errno==EINTR);
-
-			if(bytes_read==-1)
-				*output='\0';
-			else
-				output[bytes_read]='\0';
-			}
 
 		/* if there was a critical return code and no output AND the command time exceeded the timeout thresholds, assume a timeout */
 		if(result==STATE_CRITICAL && bytes_read==-1 && (end_time-start_time)>=timeout){
