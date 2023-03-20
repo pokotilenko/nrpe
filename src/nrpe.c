@@ -1731,6 +1731,8 @@ void handle_connection(int sock)
 #ifdef HAVE_SSL
 	SSL      *ssl = NULL;
 #endif
+        static int max_output_buffer=sizeof(char)*MAX_OUTPUT_BUFFER;
+        char     *pbuffer;
 
 	/* do SSL handshake */
 #ifdef HAVE_SSL
@@ -1811,12 +1813,7 @@ void handle_connection(int sock)
 		buffer[sizeof(buffer) - 1] = '\x0';
 		if (debug == TRUE)		/* log info */
 			logit(LOG_DEBUG, "Response to %s: %s", remote_host, buffer);
-		if (v3_receive_packet)
-			send_buff = strdup(buffer);
-		else {
-			send_buff = calloc(1, sizeof(buffer));
-			strcpy(send_buff, buffer);
-		}
+		send_buff = strdup(buffer);
 		result = STATE_OK;
 
 	} else {
@@ -1828,12 +1825,7 @@ void handle_connection(int sock)
 			buffer[sizeof(buffer) - 1] = '\x0';
 			if (debug == TRUE)	/* log error */
 				logit(LOG_DEBUG, "%s", buffer);
-			if (v3_receive_packet)
-				send_buff = strdup(buffer);
-			else {
-				send_buff = calloc(1, sizeof(buffer));
-				strcpy(send_buff, buffer);
-			}
+			send_buff = strdup(buffer);
 			result = STATE_UNKNOWN;
 
 		} else {
@@ -1892,6 +1884,8 @@ void handle_connection(int sock)
 		send_buff[strlen(send_buff) - 1] = '\x0';
 
 	if (packet_ver == NRPE_PACKET_VERSION_2) {
+            pbuffer=send_buff;
+            do {
 		pkt_size = sizeof(v2_packet);
 		send_pkt = (char *)&send_packet;
 
@@ -1902,16 +1896,30 @@ void handle_connection(int sock)
 
 		/* initialize response packet data */
 		send_packet.packet_version = htons(packet_ver);
-		send_packet.packet_type = htons(RESPONSE_PACKET);
 		send_packet.result_code = htons(result);
-		strncpy(&send_packet.buffer[0], send_buff, MAX_PACKETBUFFER_LENGTH);
+		strncpy(&send_packet.buffer[0], pbuffer, MAX_PACKETBUFFER_LENGTH);
 		send_packet.buffer[MAX_PACKETBUFFER_LENGTH - 1] = '\x0';
+
+                pbuffer = pbuffer+strlen(&send_packet.buffer[0]);
+                if(strlen(pbuffer)>0)
+                    send_packet.packet_type = htons(RESPONSE_PACKET_PART);
+                else
+                    send_packet.packet_type = htons(RESPONSE_PACKET);
 
 		/* calculate the crc 32 value of the packet */
 		send_packet.crc32_value = 0;
 		calculated_crc32 = calculate_crc32((char *)&send_packet, sizeof(send_packet));
 		send_packet.crc32_value = htonl(calculated_crc32);
 
+                /* send the response back to the client */
+		bytes_to_send = pkt_size;
+		if (use_ssl == FALSE)
+			sendall(sock, send_pkt, &bytes_to_send);
+#ifdef HAVE_SSL
+		else
+			SSL_write(ssl, send_pkt, bytes_to_send);
+#endif
+            } while (strlen(pbuffer) > 0);
 	} else {
 
 		pkt_size = (sizeof(v3_packet) - NRPE_V4_PACKET_SIZE_OFFSET) + strlen(send_buff) + 1;
@@ -1932,16 +1940,18 @@ void handle_connection(int sock)
 		v3_send_packet->crc32_value = 0;
 		calculated_crc32 = calculate_crc32((char *)v3_send_packet, pkt_size);
 		v3_send_packet->crc32_value = htonl(calculated_crc32);
-	}
 
-	/* send the response back to the client */
-	bytes_to_send = pkt_size;
-	if (use_ssl == FALSE)
-		sendall(sock, send_pkt, &bytes_to_send);
+		/* send the response back to the client */
+		bytes_to_send = pkt_size;
+		if (use_ssl == FALSE)
+			sendall(sock, send_pkt, &bytes_to_send);
 #ifdef HAVE_SSL
-	else
-		SSL_write(ssl, send_pkt, bytes_to_send);
+		else
+			SSL_write(ssl, send_pkt, bytes_to_send);
 #endif
+
+        }
+
 
 #ifdef HAVE_SSL
 	if (ssl) {
@@ -2324,10 +2334,6 @@ int my_system(char *command, int timeout, int *early_timeout, char **output)
 		exit(STATE_CRITICAL);
 	}
 
-	/* make the pipe non-blocking */
-	fcntl(fd[0], F_SETFL, O_NONBLOCK);
-	fcntl(fd[1], F_SETFL, O_NONBLOCK);
-
 	time(&start_time);			/* get the command start time */
 
 	pid = fork();				/* fork */
@@ -2337,13 +2343,7 @@ int my_system(char *command, int timeout, int *early_timeout, char **output)
 		snprintf(buffer, sizeof(buffer) - 1, "NRPE: Call to fork() failed\n");
 		buffer[sizeof(buffer) - 1] = '\x0';
 
-		if (packet_ver == NRPE_PACKET_VERSION_2) {
-			int       output_size = sizeof(v2_packet);
-			*output = calloc(1, output_size);
-			strncpy(*output, buffer, output_size - 1);
-			*output[output_size - 1] = '\0';
-		} else
-			*output = strdup(buffer);
+		*output = strdup(buffer);
 
 		/* close both ends of the pipe */
 		close(fd[0]);
@@ -2394,7 +2394,7 @@ int my_system(char *command, int timeout, int *early_timeout, char **output)
 			while ((bytes_read = fread(buffer, 1, sizeof(buffer) - 1, fp)) > 0) {
 				/* write the output back to the parent process */
 				if (write(fd[1], buffer, bytes_read) == -1)
-					logit(LOG_ERR, "ERROR: my_system() write(fd, buffer)-2 failed...");
+					logit(LOG_ERR, "ERROR: my_system() write(fd, buffer)-2 failed: %s (%d)", strerror(errno), errno);
 			}
 
 			if (write(fd[1], "\0", 1) == -1)
@@ -2422,25 +2422,9 @@ int my_system(char *command, int timeout, int *early_timeout, char **output)
 		commands_running++;
 
 		close(fd[1]);			/* close pipe for writing */
-		waitpid(pid, &status, 0);	/* wait for child to exit */
-		time(&end_time);		/* get the end time for running the command */
-		result = WEXITSTATUS(status);	/* get the exit code returned from the program */
 
-		/* because of my idiotic idea of having UNKNOWN states be equivalent to -1, I must hack things a bit... */
-		if (result == 255)
-			result = STATE_UNKNOWN;
-
-		/* check bounds on the return value */
-		if (result < 0 || result > 3)
-			result = STATE_UNKNOWN;
-
-		if (packet_ver == NRPE_PACKET_VERSION_2) {
-			output_size = sizeof(v2_packet);
-			*output = calloc(1, output_size);
-		} else {
-			output_size = 1024 * 64;	/* Maximum buffer is 64K */
-			*output = calloc(1, output_size);
-		}
+		output_size = MAX_OUTPUT_BUFFER;
+		*output = malloc(output_size);
 
 		/* try and read the results from the command output (retry if we encountered a signal) */
 		for (;;) {
@@ -2458,7 +2442,19 @@ int my_system(char *command, int timeout, int *early_timeout, char **output)
 			tot_bytes += bytes_read;
 		}
 
-		(*output)[output_size - 1] = '\0';
+		(*output)[tot_bytes] = '\0';
+
+		waitpid(pid, &status, 0);	/* wait for child to exit */
+		time(&end_time);		/* get the end time for running the command */
+		result = WEXITSTATUS(status);	/* get the exit code returned from the program */
+
+		/* because of my idiotic idea of having UNKNOWN states be equivalent to -1, I must hack things a bit... */
+		if (result == 255)
+			result = STATE_UNKNOWN;
+
+		/* check bounds on the return value */
+		if (result < 0 || result > 3)
+			result = STATE_UNKNOWN;
 
 		/* if there was a critical return code and no output AND the
 		 * command time exceeded the timeout thresholds, assume a timeout */

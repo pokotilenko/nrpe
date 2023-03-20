@@ -1279,10 +1279,12 @@ int read_response()
 	u_int32_t calculated_crc32;
 	int32_t pkt_size, buffer_size;
 	int rc, result;
+	int16_t		packet_type;
 
 	alarm(0);
 	set_sig_handlers();
 
+    receive_packets:
 #ifdef HAVE_SSL
 	rc = read_packet(sd, ssl, &v2_receive_packet, &v3_receive_packet);
 #else
@@ -1290,16 +1292,6 @@ int read_response()
 #endif
 
 	alarm(0);
-
-	/* close the connection */
-#ifdef HAVE_SSL
-	if (use_ssl == TRUE) {
-		SSL_shutdown(ssl);
-		SSL_free(ssl);
-		SSL_CTX_free(ctx);
-	}
-#endif
-	graceful_close(sd, 1000);
 
 	/* recv() error */
 	if (rc < 0) {
@@ -1331,7 +1323,7 @@ int read_response()
 	if (packet_ver >= NRPE_PACKET_VERSION_3) {
 
 		buffer_size = ntohl(v3_receive_packet->buffer_length);
-		if (buffer_size < 0 || buffer_size > 65536) {
+		if (buffer_size < 0 || buffer_size > 1048576) {
 			printf("CHECK_NRPE: Response packet had invalid buffer size.\n");
 			close(sd);
 			if (v3_receive_packet) {
@@ -1376,6 +1368,7 @@ int read_response()
 	/* get the return code from the remote plugin */
 	/* and print the output returned by the daemon */
 	if (packet_ver >= NRPE_PACKET_VERSION_3) {
+                packet_type=v3_receive_packet->packet_type;
 		result = ntohs(v3_receive_packet->result_code);
 		if (v3_receive_packet->buffer_length == 0) {
 			printf("CHECK_NRPE: No output returned from daemon.\n");
@@ -1383,6 +1376,7 @@ int read_response()
 			printf("%s\n", v3_receive_packet->buffer);
 		}
 	} else {
+                packet_type=v2_receive_packet->packet_type;
 		result = ntohs(v2_receive_packet->result_code);
 		if (payload_size > 0) {
 			v2_receive_packet->buffer[payload_size - 1] = '\x0';
@@ -1395,7 +1389,7 @@ int read_response()
 			/* NSClient++ doesn't recognize it */
 			return -1;
 		} else {
-			printf("%s\n", v2_receive_packet->buffer);
+			printf("%s", v2_receive_packet->buffer);
 		}
 	}
 
@@ -1405,6 +1399,20 @@ int read_response()
 	if (v2_receive_packet) {
 		free(v2_receive_packet);
 	}
+
+        if (ntohs(packet_type) == RESPONSE_PACKET_PART) goto receive_packets;
+        else if (packet_ver == NRPE_PACKET_VERSION_2)
+            printf("\n");
+
+	/* close the connection */
+#ifdef HAVE_SSL
+	if (use_ssl == TRUE) {
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+		SSL_CTX_free(ctx);
+	}
+#endif
+	graceful_close(sd, 1000);
 
 	return result;
 }
@@ -1430,17 +1438,12 @@ int read_packet(int sock, void *ssl_ptr, v2_packet ** v2_pkt, v3_packet ** v3_pk
 			return -1;
 		}
 
-		if (packet_ver != ntohs(packet.packet_version)) {
-			printf("CHECK_NRPE: Invalid packet version received from server.\n");
-			return -1;
-		}
-
-		if (ntohs(packet.packet_type) != RESPONSE_PACKET) {
-			printf("CHECK_NRPE: Invalid packet type received from server.\n");
-			return -1;
-		}
-
 		if (packet_ver == NRPE_PACKET_VERSION_2) {
+			if (ntohs(packet.packet_type) != RESPONSE_PACKET && ntohs(packet.packet_type) != RESPONSE_PACKET_PART) {
+				printf("CHECK_NRPE: Invalid packet type received from server.\n");
+				return -1;
+			}
+
 			pkt_size = sizeof(v2_packet);
 			if (payload_size > 0) {
 				pkt_size = common_size + payload_size;
@@ -1456,6 +1459,11 @@ int read_packet(int sock, void *ssl_ptr, v2_packet ** v2_pkt, v3_packet ** v3_pk
 			buff_ptr = (*v2_pkt)->buffer;
 			memset(buff_ptr, 0, buffer_size);
 		} else {
+			if (ntohs(packet.packet_type) != RESPONSE_PACKET) {
+				printf("CHECK_NRPE: Invalid packet type received from server.\n");
+				return -1;
+			}
+
 			pkt_size = sizeof(v3_packet) - 1;
 
 			/* Read the alignment filler */
@@ -1473,7 +1481,7 @@ int read_packet(int sock, void *ssl_ptr, v2_packet ** v2_pkt, v3_packet ** v3_pk
 			tot_bytes += rc;
 
 			buffer_size = ntohl(buffer_size);
-			if (buffer_size < 0 || buffer_size > 65536) {
+			if (buffer_size < 0 || buffer_size > 1048576) {
 				logit(LOG_ERR, "Error: Received packet with invalid buffer size");
 				return -1;
 			}
@@ -1526,12 +1534,12 @@ int read_packet(int sock, void *ssl_ptr, v2_packet ** v2_pkt, v3_packet ** v3_pk
 			return -1;
 		}
 
-		if (ntohs(packet.packet_type) != RESPONSE_PACKET) {
-			printf("CHECK_NRPE: Invalid packet type received from server.\n");
-			return -1;
-		}
-
 		if (packet_ver == NRPE_PACKET_VERSION_2) {
+			if (ntohs(packet.packet_type) != RESPONSE_PACKET && ntohs(packet.packet_type) != RESPONSE_PACKET_PART) {
+				printf("CHECK_NRPE: Invalid packet type received from server.\n");
+				return -1;
+			}
+
 			pkt_size = sizeof(v2_packet);
 			if (payload_size > 0) {
 				pkt_size = common_size + payload_size;
@@ -1546,6 +1554,11 @@ int read_packet(int sock, void *ssl_ptr, v2_packet ** v2_pkt, v3_packet ** v3_pk
 			buff_ptr = (*v2_pkt)->buffer;
 			memset(buff_ptr, 0, buffer_size);
 		} else {
+			if (ntohs(packet.packet_type) != RESPONSE_PACKET) {
+				printf("CHECK_NRPE: Invalid packet type received from server.\n");
+				return -1;
+			}
+
 			pkt_size = sizeof(v3_packet) - 1;
 
 			/* Read the alignment filler */
@@ -1569,7 +1582,7 @@ int read_packet(int sock, void *ssl_ptr, v2_packet ** v2_pkt, v3_packet ** v3_pk
 			tot_bytes += rc;
 
 			buffer_size = ntohl(buffer_size);
-			if (buffer_size < 0 || buffer_size > 65536) {
+			if (buffer_size < 0 || buffer_size > 1048576) {
 				logit(LOG_ERR, "Error: Received packet with invalid buffer size");
 				return -1;
 			}
