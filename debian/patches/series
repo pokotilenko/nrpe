@@ -1,0 +1,3 @@
+02_nrpe.cfg_local-include_support_nrpe.d.patch
+07_warn_ssloption.patch
+11_reproducible_dh.h.patch
