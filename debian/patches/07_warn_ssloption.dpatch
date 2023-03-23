@@ -1,0 +1,30 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## 07_warn_ssloption.dpatch by Thijs Kinkhorst <thijs@debian.org>
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Warn against inadequateness of NRPE's own SSL option.
+
+--- a/SECURITY	2013-02-10 15:07:18.000000000 +0100
++++ b/SECURITY	2013-02-10 15:08:50.000000000 +0100
+@@ -67,14 +67,17 @@
+ ----------
+ 
+ If you do enable support for command arguments in the NRPE daemon,
+-make sure that you encrypt communications either by using:
+-
+-   1.  Stunnel (see http://www.stunnel.org for more info)
+-   2.  Native SSL support
++make sure that you encrypt communications either by using, for
++example, Stunnel (see http://www.stunnel.org for more info).
+ 
+ Do NOT assume that just because the daemon is behind a firewall
+ that you are safe!  Always encrypt NRPE traffic!
+ 
++NOTE: the currently shipped native SSL support of NRPE is not an
++adequante protection, because it does not verify clients and
++server, and uses pregenerated key material. NRPE's SSL option is
++advised against. For more information, see Debian bug #547092.
++
+ 
+ USING ARGUMENTS
+ ---------------

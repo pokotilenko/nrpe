@@ -1,0 +1,34 @@
+#! /bin/sh /usr/share/dpatch/dpatch-run
+## 09_noremove_pid.dpatch by  <simon.deziel@gmail.com>
+##
+## All lines beginning with `## DP:' are a description of the patch.
+## DP: Do not remove the PID file after a connection error (original patch 
+## DP: from Hiren Patel)
+
+# Author: Hiren Patel
+# From: http://comments.gmane.org/gmane.network.nagios.devel/6774
+# Bug-Debian: #716949
+# Bug-Ubuntu: https://launchpad.net/bugs/1126890
+
+@DPATCH@
+diff -urNad '--exclude=CVS' '--exclude=.svn' '--exclude=.git' '--exclude=.arch' '--exclude=.hg' '--exclude=_darcs' '--exclude=.bzr' pkg-nrpe~/src/nrpe.c pkg-nrpe/src/nrpe.c
+--- pkg-nrpe~/src/nrpe.c	2014-07-15 14:20:02.000000000 +0200
++++ pkg-nrpe/src/nrpe.c	2014-07-15 14:20:55.775429979 +0200
+@@ -998,7 +998,7 @@
+ 						/* close socket prioer to exiting */
+ 						close(sock);
+ 			
+-						return;
++                        exit(STATE_CRITICAL);
+ 						}
+ 
+ 					/* handle signals */
+@@ -1022,7 +1022,7 @@
+ 				        /* close socket prior to exiting */
+ 						close(new_sd);
+ 
+-						return;
++                        exit(STATE_CRITICAL);
+ 						}
+ 
+ 					/* is this is a blessed machine? */
