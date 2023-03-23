@@ -1,0 +1,20 @@
+NRPE
+----
+
+Put any local check command you need into /etc/nagios/nrpe_local.cfg or
+as a *.cfg file in /etc/nagios/nrpe.d/
+These files are included from the /etc/nagios/nrpe.cfg
+
+This package is built with support for command argument processing.
+
+This package has Large Perfdata patch applied.
+
+Do not rely on SSL mode for security
+------------------------------------
+
+NRPE contains an SSL mode which encrypts the data over the NRPE channel.
+The current implementation does not verify client or server and uses
+pregenerated key data by default. It cannot be fixed right away because
+it would break the existing NRPE protocol.
+
+Please refer to the file SECURITY.md in this directory for more information.
