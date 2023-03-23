@@ -1,0 +1,24 @@
+Description: Support nrpe_local.cfg & nrpe.d directory.
+Author: Sean Finney <seanius@debian.org>
+Author: Alexander Wirt <formorer@debian.org>
+Forwarded: not-needed
+
+--- a/sample-config/nrpe.cfg.in
++++ b/sample-config/nrpe.cfg.in
+@@ -359,3 +359,16 @@ command[check_total_procs]=@pluginsdir@/
+ 
+ #include_dir=<somedirectory>
+ #include_dir=<someotherdirectory>
++
++
++
++# local configuration:
++# if you'd prefer, you can instead place directives here
++
++include=/etc/nagios/nrpe_local.cfg
++
++# you can place your config snipplets into nrpe.d/
++# only snipplets ending in .cfg will get included
++
++include_dir=/etc/nagios/nrpe.d/
++

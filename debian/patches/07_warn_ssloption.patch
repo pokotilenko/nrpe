@@ -1,0 +1,28 @@
+Description: Warn against inadequateness of NRPE's own SSL option.
+Author: Thijs Kinkhorst <thijs@debian.org>
+Forwarded: not-needed
+
+--- a/SECURITY.md
++++ b/SECURITY.md
+@@ -91,14 +91,17 @@ Encryption
+ ----------
+ 
+ If you do enable support for command arguments in the NRPE daemon,
+-make sure that you encrypt communications either by using:
+-
+-   1.  Stunnel (see http://www.stunnel.org for more info)
+-   2.  Native SSL support (See the [SSL Readme](README.SSL.md) file for more info)
++make sure that you encrypt communications by using, for example,
++Stunnel (see http://www.stunnel.org for more info).
+ 
+ Do **NOT** assume that just because the daemon is behind a firewall
+ that you are safe! ***Always encrypt NRPE traffic!***
+ 
++NOTE: the currently shipped native SSL support of NRPE is not an
++adequante protection, because it does not verify clients and
++server, and uses pregenerated key material. NRPE's SSL option is
++advised against. For more information, see Debian bug #547092.
++
+ 
+ Using Arguments
+ ---------------
